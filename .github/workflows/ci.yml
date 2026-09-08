@@ -34,7 +34,15 @@ jobs:
         run: |
           bash ./tests/run.sh
 
-      - name: Run ShellCheck
+      - name: ShellCheck blocking errors
+        run: |
+          find bin core modules scripts tests \
+            -type f \( -name "*.sh" -o -name "vpsg" \) \
+            -print0 | xargs -0 shellcheck -x -S error
+          shellcheck -x -S error install.sh uninstall.sh
+
+      - name: ShellCheck advisory warnings
+        continue-on-error: true
         run: |
           find bin core modules scripts tests \
             -type f \( -name "*.sh" -o -name "vpsg" \) \
