@@ -1,199 +1,156 @@
 # VPS Guard
 
-Safety-first VPS hardening and operations toolkit for Debian and Ubuntu.
+A safety-first, beginner-friendly VPS hardening and operations toolkit for Debian and Ubuntu.
 
-VPS Guard is built around a simple idea: **a security tool should not lock you out of the server it is trying to protect**. Instead of only providing one-click setup actions, it adds transactional rollback, real exposure analysis, and configuration drift detection.
+VPS Guard is built around three questions traditional one-click scripts often leave unanswered:
 
-> Current version: **0.2.0**. Test on a VPS with a provider console/snapshot before production use.
+1. **What if an SSH/firewall change locks me out?**
+2. **What is actually exposed on this server, including Docker-published ports?**
+3. **What changed after I last confirmed the server was in a trusted state?**
 
-## Why VPS Guard
+Current release: **v0.3.0**
 
-Traditional VPS scripts are good at changing configuration. VPS Guard focuses on what happens **before and after** those changes:
+> VPS Guard is early-stage software. Keep provider console/rescue access available when changing remote access controls.
 
-- **Safe Change Engine** — SSH and UFW changes automatically create a rollback transaction. If you lose access and do not confirm the change, a persistent systemd timer restores the previous state.
-- **Exposure Analyzer** — shows listening sockets, bind scope, UFW status, owning processes, and Docker-published ports in one view.
-- **Baseline & Drift** — records a trusted security baseline and later detects changes to ports, SSH keys, sudo access, firewall state, services, containers, cron jobs, SSH policy, and selected sysctls.
-- Modular SSH, UFW, Fail2Ban, BBR, Swap, Docker and system-management modules.
+## Core differentiators
 
-## Safe Change Engine
+### Safe Change Engine 2.0
 
-Normal SSH/UFW `apply` commands are protected automatically:
+Risky SSH/UFW changes are transactional. VPS Guard performs pre-checks, snapshots state, arms a persistent systemd rollback timer, applies the change, verifies it, and refuses to make it permanent until the administrator commits it.
 
 ```bash
 sudo vpsg ssh apply --yes
 sudo vpsg firewall apply --yes
-```
-
-VPS Guard will:
-
-1. snapshot the relevant configuration;
-2. create a rollback transaction;
-3. arm a persistent systemd rollback timer;
-4. apply and verify the change;
-5. wait for you to confirm from a second SSH session.
-
-Example:
-
-```text
-Safe Change started: rollback in 180 seconds unless committed.
-Transaction: 20260908-142530-a12f
-
-Open a new SSH session and verify access.
-Then run:
-  sudo vpsg commit 20260908-142530-a12f
-```
-
-Useful commands:
-
-```bash
 vpsg safe status
 sudo vpsg commit
-sudo vpsg safe rollback
-
-# Custom rollback window, 30–1800 seconds
-sudo vpsg safe firewall apply --timeout 300 --yes
+vpsg safe history
 ```
 
-The rollback timer uses an absolute systemd calendar deadline with `Persistent=true`, so the safety action is independent of the SSH shell that started it and can still fire after a reboot if the deadline was missed.
+If access is lost and no commit happens, the server restores the previous configuration automatically. Transaction history, event logs, post-apply validation and commit-time verification are included.
 
-## Exposure Analyzer
+### Exposure Analyzer 2.0
 
 ```bash
 vpsg exposure scan
-vpsg exposure explain 3306
+vpsg exposure explain 6379
 vpsg exposure json
 ```
 
-Example output:
+It correlates listeners, bind scope, UFW, Docker-published ports and common service types, then assigns explainable risk levels and recommendations. It distinguishes host-level exposure indicators from proven Internet reachability because cloud security groups, NAT and upstream firewalls remain outside the host.
 
-```text
-PORT    PROTO BIND                   SCOPE      FIREWALL      CLASS        OWNER / DOCKER
-22      tcp   0.0.0.0                wildcard   allow         NET-FACING   sshd
-443     tcp   0.0.0.0                wildcard   allow         DOCKER-PUB   docker-proxy | proxy@0.0.0.0->443/tcp
-5432    tcp   127.0.0.1              loopback   default       LOCAL        postgres
-```
-
-`NET-FACING` and `DOCKER-PUB` mean the service is bound to an externally reachable interface. VPS Guard deliberately does **not** claim that a port is definitely reachable from the public Internet because provider security groups, upstream firewalls, NAT, nftables and routing can still block it.
-
-## Baseline & Drift
-
-Create a trusted baseline after you finish configuring the server:
+### Baseline & Drift 2.0
 
 ```bash
 sudo vpsg baseline create
-```
-
-Later:
-
-```bash
 sudo vpsg drift scan
+vpsg drift history
 ```
 
-Tracked areas include:
+Tracks listeners, Docker ports/containers, users, sudo access, authorized-key hashes/counts, SSH policy, firewall state, enabled services, cron and selected sysctls. Drift output explains why each changed area matters and stores local audit reports.
 
-- listening TCP/UDP sockets;
-- Docker published ports and running container state;
-- root and normal login-capable users;
-- sudo-group membership and sudoers file hashes;
-- `authorized_keys` file hashes and key counts (keys themselves are not copied into the baseline);
-- effective SSH security settings;
-- UFW/nftables firewall state;
-- enabled systemd services;
-- cron file hashes;
-- selected network/security sysctls.
+## Practical VPS management
 
-After reviewing a legitimate change, accept the current state as the new baseline:
-
-```bash
-sudo vpsg baseline create default --force
+```text
+SSH / GitHub SSH key import     ✓
+UFW firewall management         ✓
+Fail2Ban                        ✓
+User and sudo management        ✓
+Docker / Compose                ✓
+1Panel integration              ✓
+BBR / Swap                      ✓
+Network speed / route tools     ✓
+Media reachability probes       ✓
+Risk-aware APT upgrade plan     ✓
+Daily security Watch            ✓
+Read-only incident collection   ✓
 ```
 
-For CI/monitoring integration, `--strict` returns exit code `3` when drift is detected:
+Start the beginner menu with:
 
 ```bash
-sudo vpsg drift scan default --strict
+vpsg
 ```
 
-## Other modules
+## Examples
 
 ```bash
+# Dashboard and security checks
 vpsg status
 vpsg doctor
-vpsg module list
+vpsg exposure scan
 
-vpsg ssh plan
-vpsg firewall plan
+# Safer SSH hardening
+sudo vpsg ssh apply --disable-password --root-key-only --yes
+vpsg safe status
+sudo vpsg commit
+
+# Users and GitHub keys
+sudo vpsg users add deploy --sudo
+sudo vpsg ssh import-github octocat --user deploy
+
+# Firewall / Fail2Ban
+sudo vpsg firewall apply --yes
+sudo vpsg firewall web
 sudo vpsg fail2ban apply --yes
-sudo vpsg bbr apply --yes
-sudo vpsg swap apply --yes
+
+# Docker / 1Panel
 sudo vpsg docker apply --yes
+vpsg docker ports
+sudo vpsg panel install
+
+# Network tools
+vpsg network summary
+vpsg network speed 25
+vpsg network route 1.1.1.1
+vpsg network media
+
+# Continuous local checks
+sudo vpsg baseline create
+sudo vpsg watch enable
 ```
+
+## Install
+
+Download a release, inspect/verify it, extract it, then:
+
+```bash
+sudo bash install.sh
+vpsg --version
+vpsg doctor
+```
+
+The installer intentionally works even if executable mode bits were lost by a ZIP download or web upload. The runtime router also invokes built-in modules through Bash rather than relying on source-tree executable bits.
 
 ## Supported systems
 
 - Debian 12/13
 - Ubuntu 22.04/24.04
 - systemd
-- root or sudo for operations that need privileged state
 
-## Install
+## Security principles
 
-From a checked-out release/source tree:
-
-```bash
-sudo ./install.sh
-vpsg --version
-vpsg doctor
-```
-
-VPS Guard intentionally does not require a `curl | bash` installation path. Download a release, verify its checksum, then install it locally.
-
-## Project layout
-
-```text
-bin/vpsg                     CLI and interactive menu
-core/common.sh               logging, confirmation, backups
-core/platform.sh             OS and SSH port detection
-core/router.sh               module discovery and routing
-core/transaction.sh          Safe Change transaction engine
-core/inspect.sh              normalized host inspection primitives
-modules/builtin/exposure/    Exposure Analyzer
-modules/builtin/baseline/    trusted snapshot creation
-modules/builtin/drift/       baseline comparison and risk reporting
-modules/builtin/ssh/         SSH hardening
-modules/builtin/firewall/    UFW hardening
-modules/builtin/*            other built-in modules
-tests/run.sh                 smoke and regression tests
-docs/                        architecture and security model
-```
-
-## Security model
-
-Read [docs/security-model.md](docs/security-model.md) before relying on VPS Guard for production access controls. Important design rules include:
-
-- preserve current SSH access before enforcing firewall changes;
-- make risky changes transactional;
-- verify configuration before service reload;
-- store project state with restrictive permissions;
+- preserve current SSH access before firewall enforcement;
+- use automatic rollback for access-critical changes;
+- validate before and after high-risk changes;
+- avoid `curl | bash` for the built-in 1Panel workflow;
 - do not store SSH private keys or copy authorized-key contents into baselines;
-- report uncertainty instead of claiming provider-level public reachability.
+- separate host-level exposure indicators from provider-level reachability;
+- keep Watch and incident data local by default.
+
+See [docs/security-model.md](docs/security-model.md).
 
 ## Development
 
 ```bash
-./tests/run.sh
-shellcheck -x bin/vpsg core/*.sh modules/builtin/*/module.sh install.sh uninstall.sh
+bash tests/run.sh
+shellcheck -x -S error bin/vpsg core/*.sh modules/builtin/*/module.sh install.sh uninstall.sh
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/architecture.md](docs/architecture.md).
-
-## Roadmap
-
-See [docs/roadmap.md](docs/roadmap.md).
+See [docs/feature-matrix.md](docs/feature-matrix.md), [docs/roadmap.md](docs/roadmap.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Chinese documentation
 
-See [README.zh-CN.md](README.zh-CN.md).
+[README.zh-CN.md](README.zh-CN.md)
 
 ## License
 

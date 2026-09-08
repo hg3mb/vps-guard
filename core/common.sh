@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 VPSG_NAME="VPS Guard"
-VPSG_VERSION="0.2.0"
+VPSG_VERSION="0.3.0"
 VPSG_ROOT="${VPSG_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VPSG_STATE_DIR="${VPSG_STATE_DIR:-/var/lib/vps-guard}"
 VPSG_BACKUP_DIR="${VPSG_BACKUP_DIR:-${VPSG_STATE_DIR}/backups}"

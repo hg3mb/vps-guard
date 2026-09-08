@@ -2,12 +2,14 @@
 
 module_path() { printf '%s/modules/builtin/%s/module.sh\n' "$VPSG_ROOT" "$1"; }
 
-module_exists() { [[ -x "$(module_path "$1")" ]]; }
+# Do not require the executable bit. GitHub web uploads and ZIP downloads can
+# lose Unix mode bits; invoking modules through bash keeps source checkouts usable.
+module_exists() { [[ -f "$(module_path "$1")" ]]; }
 
 module_list() {
   local d
   for d in "$VPSG_ROOT"/modules/builtin/*; do
-    [[ -d "$d" && -x "$d/module.sh" ]] || continue
+    [[ -d "$d" && -f "$d/module.sh" ]] || continue
     basename "$d"
   done | sort
 }
@@ -19,5 +21,5 @@ route_module() {
     error "未知模块: $module"
     return 64
   fi
-  "$(module_path "$module")" "$action" "$@"
+  /bin/bash "$(module_path "$module")" "$action" "$@"
 }

@@ -1,25 +1,30 @@
 # Roadmap
 
-## 0.2.x — harden the three core differentiators
+## v0.3.x — reliability and usability
 
-- Safe Change integration tests on Debian/Ubuntu VMs
+- Real VPS compatibility fixes from Debian 12/13 and Ubuntu 22.04/24.04 reports
+- ShellCheck warning cleanup without hiding blocking errors
 - nftables-aware exposure correlation
-- systemd timer cleanup and transaction history command
-- richer Docker Compose port attribution
-- baseline exclusions and user-defined policy profiles
+- richer Docker Compose service attribution
+- more integration tests for Safe Change timer lifecycle
+- installer update/rollback command
 
-## 0.3 — policy-aware operations
+## v0.4 — policy and notifications
 
-- `vpsg profile web|docker|database|proxy`
-- expected-port allowlist and drift policy
-- risk-aware APT upgrade planning
-- reboot-required and post-upgrade service verification
+- `vpsg profile web|docker|database|proxy|minimal`
+- expected public-port policy and reduced false positives
+- Watch notification adapters: generic webhook first, then optional email/Telegram
+- maintenance windows and baseline exclusions
+- explicit reboot-safe upgrade workflow
 
-## 0.4 — incident collection
+## v0.5 — deeper diagnostics
 
-- read-only incident bundle
-- failed-login, process, socket, cron and service evidence
-- redaction modes
-- SHA-256 manifest
+- provider/cloud firewall connectors where credentials are explicitly configured
+- richer route/ASN diagnostics
+- optional third-party benchmark adapters with pinned source/version display
+- incident bundle redaction modes
+- signed release/checksum workflow
 
-The project intentionally prioritizes safety and explainability over adding large numbers of one-click installers.
+## Non-goals
+
+VPS Guard will not maximize feature count by silently piping arbitrary Internet scripts into root shells. Convenience features should preserve inspectability, rollback where practical, and clear trust boundaries.

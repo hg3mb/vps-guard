@@ -1,22 +1,21 @@
 # Changelog
 
+## 0.3.0
+
+- Safe Change Engine 2.0: pre-checks, post-apply verification, commit verification, transaction history and event logs.
+- Exposure Analyzer 2.0: risk levels, common service hints, Docker/UFW correlation, explanations and practical recommendations.
+- Baseline & Drift 2.0: human-readable risk reasons and persistent drift reports.
+- Added user/sudo management.
+- Added safer 1Panel integration that downloads, validates and previews the official installer before execution.
+- Added network toolbox: public IP, quick download speed test, route tracing, media reachability and lightweight VPS info.
+- Expanded Docker management.
+- Added risk-aware system upgrade planning.
+- Added VPS Guard Watch with local daily security reports.
+- Router no longer depends on executable mode bits, improving GitHub ZIP/web-upload usability.
+- Fixed installed `/usr/local/bin/vpsg` symlink root resolution and added a regression test.
+
 ## 0.2.0
 
-### Added
-
-- Safe Change Engine for SSH and UFW with automatic rollback deadlines
-- persistent systemd rollback timer and explicit `vpsg commit`
-- `vpsg safe status` and manual safe rollback
-- Exposure Analyzer for sockets, UFW and Docker published ports
-- security baseline creation
-- configuration drift detection with risk classes and `--strict`
-- English and Chinese project documentation
-
-### Changed
-
-- direct CLI `ssh apply` and `firewall apply` now enter Safe Change automatically
-- `doctor` checks prerequisites for Exposure and Safe Change
-
-## 0.1.0
-
-- Initial modular VPS hardening MVP
+- Safe Change Engine initial release.
+- Exposure Analyzer initial release.
+- Baseline & Drift initial release.

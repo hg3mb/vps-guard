@@ -33,6 +33,14 @@ The baseline deliberately avoids copying SSH authorized-key contents. It records
 
 Baseline data can still reveal usernames, service names, ports and container metadata, so `/var/lib/vps-guard` should remain root-only and should not be published.
 
+## External installer boundary
+
+The 1Panel module is an integration, not a bundled copy of 1Panel. It stages the official installer in a temporary file, rejects obvious HTML/error pages, prints a SHA-256 and preview, and requires an explicit second confirmation. A dynamic upstream script still represents an external trust dependency; review it when the server is sensitive.
+
+## Watch and incident privacy
+
+Watch reports and incident bundles remain local under `/var/lib/vps-guard`. They may contain usernames, IP addresses, service names, process command lines and container metadata. Incident collection deliberately excludes SSH private keys and authorized-key contents, but reports should still be reviewed before sharing.
+
 ## Recovery recommendation
 
 Always keep at least one provider-side recovery option available when changing remote access controls: web console, serial console, rescue mode or a recent snapshot.

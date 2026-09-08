@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SELF_PATH="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then SELF_PATH="$(readlink -f "$SELF_PATH" 2>/dev/null || printf '%s' "$SELF_PATH")"; fi
+SELF_DIR="$(cd "$(dirname "$SELF_PATH")" && pwd)"
 VPSG_ROOT="${VPSG_ROOT:-$(cd "$SELF_DIR/.." && pwd)}"
 export VPSG_ROOT
 # shellcheck source=../core/common.sh
@@ -20,51 +22,59 @@ usage() {
 $VPSG_NAME $VPSG_VERSION
 
 用法:
-  vpsg                              交互菜单
-  vpsg status                       系统状态总览
+  vpsg                              新手交互菜单
+  vpsg status                       VPS 仪表盘
   vpsg doctor                       只读安全检查
-  vpsg exposure scan                公网暴露面分析
+  vpsg exposure scan                实际公网暴露与风险解释
   sudo vpsg baseline create         创建安全基线
-  sudo vpsg drift scan              检测配置漂移
-  sudo vpsg safe ssh apply          Safe Change（默认 180 秒自动回滚）
-  sudo vpsg safe firewall apply     Safe Change（默认 180 秒自动回滚）
-  sudo vpsg commit [transaction-id] 确认修改并取消自动回滚
-  vpsg safe status                  查看回滚倒计时
+  sudo vpsg drift scan              检测服务器之后发生的变化
+  sudo vpsg safe ssh apply          SSH Safe Change（失联自动回滚）
+  sudo vpsg safe firewall apply     UFW Safe Change（失联自动回滚）
+  vpsg safe history                 查看安全变更历史
+  sudo vpsg commit [id]             确认 Safe Change
+  vpsg users list                   用户与 sudo 权限管理
+  vpsg network summary              网络信息/测速/路由/流媒体可达性
+  vpsg panel status                 1Panel 集成
+  vpsg watch status                 持续安全检查
+  sudo vpsg incident collect        只读异常现场采集
   vpsg module list                  列出模块
-  vpsg <module> <action> [...]      执行模块操作
 
-注意:
-  正常执行 'vpsg ssh apply' 或 'vpsg firewall apply' 也会自动进入 Safe Change，
-  必须在倒计时结束前执行 vpsg commit 才会永久保留修改。
-
-模块: system ssh firewall fail2ban bbr swap docker exposure baseline drift
+模块: system ssh firewall fail2ban users docker panel network bbr swap exposure baseline drift watch incident
 USAGE
 }
+
+_run() { route_module "$@"; }
 
 status_overview() {
   platform_detect || true
   printf '%b%s %s%b\n' "$C_BOLD" "$VPSG_NAME" "$VPSG_VERSION" "$C_RESET"
   printf '系统: %s\n' "${VPSG_OS_PRETTY:-unknown}"
-  if p="$(ssh_primary_port 2>/dev/null)"; then printf 'SSH 端口: %s\n' "$p"; else printf 'SSH 端口: 无法唯一确认\n'; fi
-  printf 'UFW: '; "$VPSG_ROOT/modules/builtin/firewall/module.sh" status --brief 2>/dev/null || true
-  printf 'Fail2Ban: '; "$VPSG_ROOT/modules/builtin/fail2ban/module.sh" status --brief 2>/dev/null || true
-  printf 'BBR: '; "$VPSG_ROOT/modules/builtin/bbr/module.sh" status --brief 2>/dev/null || true
-  printf 'Swap: '; "$VPSG_ROOT/modules/builtin/swap/module.sh" status --brief 2>/dev/null || true
-  printf 'Docker: '; "$VPSG_ROOT/modules/builtin/docker/module.sh" status --brief 2>/dev/null || true
+  printf '主机: %s  内核: %s\n' "$(hostname 2>/dev/null || echo unknown)" "$(uname -r)"
+  printf '内存: %s MB  根分区可用: %s MB\n' "$(memory_mb 2>/dev/null || echo '?')" "$(root_free_mb 2>/dev/null || echo '?')"
+  if p="$(ssh_primary_port 2>/dev/null)"; then printf 'SSH: %s/tcp\n' "$p"; else printf 'SSH: 无法唯一确认端口\n'; fi
+  printf 'UFW: '; _run firewall status --brief 2>/dev/null || true
+  printf 'Fail2Ban: '; _run fail2ban status --brief 2>/dev/null || true
+  printf 'Docker: '; _run docker status --brief 2>/dev/null || true
+  printf 'BBR: '; _run bbr status --brief 2>/dev/null || true
+  printf 'Swap: '; _run swap status --brief 2>/dev/null || true
   if _tx_pending_id >/dev/null 2>&1; then
-    printf 'Safe Change: 待确认（运行 vpsg safe status 查看倒计时）\n'
+    printf '%bSafe Change: 待确认（vpsg safe status）%b\n' "$C_YELLOW" "$C_RESET"
+  fi
+  if [[ -d "$VPSG_STATE_DIR/baselines/default" ]]; then
+    printf '安全基线: 已创建\n'
+  else
+    printf '安全基线: 未创建（建议 sudo vpsg baseline create）\n'
   fi
 }
 
 doctor() {
   local failures=0
   platform_supported && ok "支持的系统: $VPSG_OS_PRETTY" || { warn "当前只正式支持 Debian/Ubuntu"; failures=$((failures+1)); }
-  if p="$(ssh_primary_port 2>/dev/null)"; then ok "确认 SSH 端口: $p"; else warn "无法唯一确认 SSH 端口；不会建议自动启用防火墙"; failures=$((failures+1)); fi
+  if p="$(ssh_primary_port 2>/dev/null)"; then ok "确认 SSH 端口: $p"; else warn "无法唯一确认 SSH 端口；不会自动启用防火墙"; failures=$((failures+1)); fi
   if [[ -r /etc/ssh/sshd_config ]] && have sshd && sshd -t 2>/dev/null; then ok "OpenSSH 配置语法正常"; else warn "无法验证 OpenSSH 配置"; failures=$((failures+1)); fi
-  if [[ -d /etc/ssh/sshd_config.d ]]; then ok "支持 sshd_config.d 配置片段"; else warn "未发现 sshd_config.d"; fi
-  have systemctl && ok "systemd 可用" || warn "systemd 不可用"
-  have systemctl && ok "Safe Change systemd timer 可用" || { warn "systemctl 不可用，Safe Change 无法启动"; failures=$((failures+1)); }
+  have systemctl && ok "systemd / Safe Change timer 可用" || { warn "systemd 不可用，失联自动回滚无法工作"; failures=$((failures+1)); }
   have ss && ok "Exposure Analyzer 可用" || { warn "缺少 ss/iproute2"; failures=$((failures+1)); }
+  have curl && ok "网络诊断依赖 curl 可用" || warn "缺少 curl，网络/1Panel 部分功能需要安装"
   printf '检查完成：%d 项需要关注。\n' "$failures"
 }
 
@@ -74,35 +84,47 @@ menu() {
     status_overview
     cat <<'MENU'
 
-1. 公网暴露分析
-2. 创建/更新安全基线
-3. 检测配置漂移
-4. SSH 安全配置（Safe Change）
-5. UFW 防火墙（Safe Change）
-6. 查看/确认 Safe Change
-7. Fail2Ban
-8. BBR / Swap / Docker
-9. 完整体检
-0. 退出
+安全与变化
+  1. 一键安全体检
+  2. 看公网到底暴露了什么
+  3. 创建安全基线
+  4. 检查服务器发生了什么变化
+  5. 安全修改 SSH（失联自动恢复）
+  6. 安全配置 UFW（失联自动恢复）
+  7. Safe Change 状态/历史
+
+日常管理
+  8. 用户与 sudo 管理
+  9. Fail2Ban
+ 10. Docker
+ 11. 1Panel
+ 12. 网络测速 / 路由 / 流媒体可达性
+ 13. 系统更新风险检查
+ 14. BBR / Swap
+ 15. VPS Guard Watch
+ 16. 异常现场采集
+  0. 退出
 MENU
     read -r -p '请选择: ' c
     case "$c" in
-      1) route_module exposure scan ;;
-      2) route_module baseline create default ;;
-      3) route_module drift scan default ;;
-      4) route_module ssh plan; if confirm "应用 SSH 安全配置？"; then VPSG_ASSUME_YES=1 tx_safe_apply ssh apply --yes; fi ;;
-      5) route_module firewall plan; if confirm "应用 UFW 配置？"; then VPSG_ASSUME_YES=1 tx_safe_apply firewall apply --yes; fi ;;
-      6)
-        tx_status
-        if _tx_pending_id >/dev/null 2>&1 && confirm "已在新 SSH 会话验证正常，确认保留修改？"; then tx_commit; fi
-        ;;
-      7) route_module fail2ban plan; if confirm "安装/配置 Fail2Ban？"; then VPSG_ASSUME_YES=1 route_module fail2ban apply --yes; fi ;;
-      8)
-        echo "a) BBR  b) Swap  c) Docker"
-        read -r -p '请选择: ' sub
-        case "$sub" in a) route_module bbr apply;; b) route_module swap apply;; c) route_module docker apply;; esac
-        ;;
-      9) doctor ;;
+      1) doctor ;;
+      2) _run exposure scan ;;
+      3) _run baseline create default ;;
+      4) _run drift scan default ;;
+      5) _run ssh plan; if confirm "应用 SSH 安全配置？"; then VPSG_ASSUME_YES=1 tx_safe_apply ssh apply --yes; fi ;;
+      6) _run firewall plan; if confirm "应用 UFW 配置？"; then VPSG_ASSUME_YES=1 tx_safe_apply firewall apply --yes; fi ;;
+      7) tx_status; echo; tx_history 10 ;;
+      8) _run users menu ;;
+      9) _run fail2ban plan; if confirm "安装/配置 Fail2Ban？"; then VPSG_ASSUME_YES=1 _run fail2ban apply --yes; fi ;;
+      10) _run docker menu ;;
+      11) _run panel menu ;;
+      12) _run network menu ;;
+      13) _run system plan ;;
+      14)
+        echo "a) BBR  b) Swap"; read -r -p '请选择: ' sub
+        case "$sub" in a) _run bbr apply;; b) _run swap apply;; esac ;;
+      15) _run watch menu ;;
+      16) echo "只读采集进程、端口、登录、systemd、Docker 等现场信息，不复制密钥内容。"; if confirm "生成现场包？"; then _run incident collect; fi ;;
       0) exit 0 ;;
       *) warn "无效选项" ;;
     esac
@@ -113,12 +135,14 @@ MENU
 safe_command() {
   case "${1:-}" in
     status) tx_status "${2:-}" ;;
+    history) tx_history "${2:-20}" ;;
+    show) tx_show "${2:-}" ;;
     rollback) tx_manual_rollback "${2:-}" ;;
     ssh|firewall)
       local module="$1" action="${2:-}"; shift 2 2>/dev/null || true
       tx_safe_apply "$module" "$action" "$@"
       ;;
-    *) error "用法: vpsg safe <ssh|firewall> apply [--timeout 180] [--yes] | safe status | safe rollback"; return 64 ;;
+    *) error "用法: vpsg safe <ssh|firewall> apply | safe status | safe history | safe show <id> | safe rollback"; return 64 ;;
   esac
 }
 
@@ -132,16 +156,11 @@ main() {
     safe) shift; safe_command "$@" ;;
     commit) tx_commit "${2:-}" ;;
     module)
-      case "${2:-}" in
-        list) module_list ;;
-        *) error "用法: vpsg module list"; return 64 ;;
-      esac ;;
+      case "${2:-}" in list) module_list;; *) error "用法: vpsg module list"; return 64;; esac ;;
     *)
       local module="$1" action="${2:-status}"
       shift 2 2>/dev/null || true
-      parse_yes_flag "$@"
-      export VPSG_ASSUME_YES
-      # SSH / firewall apply are protected by Safe Change by default.
+      parse_yes_flag "$@"; export VPSG_ASSUME_YES
       if [[ "$action" == "apply" && ( "$module" == "ssh" || "$module" == "firewall" ) ]]; then
         tx_safe_apply "$module" apply "$@"
       else
