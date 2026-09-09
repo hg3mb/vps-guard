@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
-module_path() { printf '%s/modules/builtin/%s/module.sh\n' "$VPSG_ROOT" "$1"; }
+module_id_valid() { [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]]; }
+module_path() { module_id_valid "$1" || return 64; printf '%s/modules/builtin/%s/module.sh\n' "$VPSG_ROOT" "$1"; }
 
 # Do not require the executable bit. GitHub web uploads and ZIP downloads can
 # lose Unix mode bits; invoking modules through bash keeps source checkouts usable.
-module_exists() { [[ -f "$(module_path "$1")" ]]; }
+module_exists() { module_id_valid "$1" || return 1; [[ -f "$(module_path "$1")" ]]; }
 
 module_list() {
   local d

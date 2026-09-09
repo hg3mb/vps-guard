@@ -1,175 +1,175 @@
 # VPS Guard
 
-**安全优先、对新手友好的 Debian / Ubuntu VPS 运维工具。**
+[![CI](https://github.com/hg3mb/vps-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/hg3mb/vps-guard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hg3mb/vps-guard)](https://github.com/hg3mb/vps-guard/releases/latest)
+[![License](https://img.shields.io/github/license/hg3mb/vps-guard)](LICENSE)
 
-VPS Guard 不只是“一键安装一堆东西”。它的目标是让普通 VPS 用户能做到三件更重要的事：
 
-1. **改 SSH / 防火墙时，不小心失联也能自动恢复。**
-2. **知道服务器实际上向外暴露了什么，而不是只看 UFW 表面状态。**
-3. **知道服务器从上次确认安全以后发生了哪些变化。**
+**安全优先、好用易懂的 Debian / Ubuntu VPS 加固与日常运维工具。**
 
-当前版本：**v0.3.0**
+VPS Guard 的目标不是把几十个“一键脚本”塞进菜单，而是在常用功能够用的基础上，把普通 VPS 用户最容易踩坑的几件事做好：
 
-## 新手直接用
+1. **SSH / 防火墙改错导致失联，能不能自己恢复？**
+2. **服务器实际上向外暴露了什么，包括 Docker 端口？**
+3. **服务器从上次确认可信以后，到底发生了什么变化？**
+4. **“没发现问题”和“根本没检查到”能不能明确区分？**
 
-安装后直接运行：
+当前版本：**v0.4.0** · [项目仓库](https://github.com/hg3mb/vps-guard) · [最新 Release](https://github.com/hg3mb/vps-guard/releases/latest)
+
+> 项目仍处于早期阶段。修改远程访问控制时，仍建议保留云厂商 Console / VNC / Rescue Mode 作为最后兜底。
+
+## 三个核心能力
+
+### Safe Change Engine 3.0 — 改错了也有后悔药
+
+SSH 和关键 UFW 修改不是“执行完就算了”，而是一个安全事务：
+
+```text
+修改前检查
+  ↓
+保存恢复点
+  ↓
+启动独立 systemd 自动回滚
+  ↓
+应用修改
+  ↓
+验证实际生效状态
+  ↓
+重新建立 SSH 登录 / Console 明确确认
+  ↓
+commit 才永久保留
+
+超时没 commit → 自动恢复
+```
+
+```bash
+sudo vpsg ssh apply --disable-password --yes
+vpsg safe status
+sudo vpsg commit
+vpsg safe history
+```
+
+v0.4.0 重点加强：
+
+- 同一时间只允许一个访问关键事务；
+- root-only 状态、恢复脚本和事件历史；
+- 自动回滚不依赖发起修改的 SSH 窗口；
+- SSH 同时验证语法和 **实际 effective config**；
+- 同一个 SSH 登录会话不能直接把危险修改 commit；
+- 支持手工 rollback、延长倒计时、历史查看；
+- `apply_failed / rolling_back / rollback_failed` 都不会被当成“已经安全结束”。
+
+### Exposure Analyzer 3.0 — 看清真实暴露面
+
+```bash
+sudo vpsg exposure scan
+vpsg exposure explain 6379
+vpsg exposure profile set web
+vpsg exposure json
+```
+
+它不是只跑一下 `ss`，而是统一分析：
+
+- TCP / UDP listener；
+- loopback / 私网 / CGNAT / 公网指定地址 / wildcard；
+- Docker structured published ports；
+- UFW 上下文；
+- Docker 容器内部端口对应的服务类型；
+- 当前服务器用途 Profile。
+
+风险使用可解释的：
+
+```text
+CRITICAL / HIGH / MEDIUM / LOW / INFO
+```
+
+例如宿主机映射 `13306 -> mysql:3306`，不会因为宿主端口不是 3306 就漏掉数据库风险。
+
+如果 Docker 已安装、但当前用户没有权限读取 Docker daemon，VPS Guard 会明确显示 **扫描不完整**，而不是错误告诉你“没有 Docker 暴露”。
+
+### Baseline & Semantic Drift 3.0 — 告诉你后来发生了什么
+
+服务器配置完成、确认可信后：
+
+```bash
+sudo vpsg baseline create
+sudo vpsg baseline verify
+```
+
+以后检查：
+
+```bash
+sudo vpsg drift scan
+vpsg drift history
+```
+
+报告更像：
+
+```text
+CRITICAL  + Docker API 新增公网发布
+HIGH      + authorized_keys 发生变化
+HIGH      + sudo 权限变化
+MEDIUM    + 新增可登录用户
+MEDIUM    + 某个安全采集器从完整变为不完整
+INFO      - 原有监听端口消失
+```
+
+Baseline 不保存 SSH 私钥，也不复制 `authorized_keys` 内容，只保存需要的路径、数量和哈希等元数据。
+
+完整性不只验证“已有文件内容有没有被改”，也验证**应该存在的文件集合有没有被偷偷增加/删除**。每个采集器还会记录 `ok / incomplete(...)`，避免把“扫描失败后的空结果”当成安全。
+
+确认某次 Drift 的变化确实是自己操作后，可以把**那一次已经审核过的快照**接受为新基线：
+
+```bash
+sudo vpsg drift accept <report-id>
+```
+
+## 新手怎么用
+
+安装后直接：
 
 ```bash
 vpsg
 ```
 
-会看到中文菜单，把功能按“安全与变化 / 日常管理”分组，不要求先记命令。
-
-常用入口：
+或者：
 
 ```bash
-vpsg status                 # VPS 仪表盘
-vpsg doctor                 # 只读体检
-vpsg exposure scan          # 看公网暴露与风险
-sudo vpsg baseline create   # 建立可信安全基线
-sudo vpsg drift scan        # 看之后发生了什么变化
+vpsg setup guide
 ```
 
-## 三个核心创新
-
-### Safe Change Engine 2.0
-
-SSH / UFW 修改会先创建恢复事务，并启动独立的 systemd 倒计时。如果管理员因为配置错误失去 SSH 连接，**不需要再登录服务器执行 rollback**；到时间后服务器自己恢复。
-
-```bash
-sudo vpsg ssh apply --yes
-sudo vpsg firewall apply --yes
-```
-
-流程：
+推荐流程：
 
 ```text
-修改前自检
+Doctor / Exposure
   ↓
-保存恢复点
+选择服务器用途 Profile
   ↓
-启动失联回滚计时器
+创建第二管理员 + SSH Key
   ↓
-应用修改
+Fail2Ban + 自动安全更新
   ↓
-修改后再次验证
+Safe Change 配置 SSH / UFW
   ↓
-新开 SSH 窗口测试
+建立 Baseline
   ↓
-sudo vpsg commit
+开启 Watch
 ```
 
-如果不 commit，则自动恢复。
+项目**不会提供“回车后把整台 VPS 全部重写”的危险模式**。
 
-```bash
-vpsg safe status
-vpsg safe history
-vpsg safe show <transaction-id>
-sudo vpsg safe rollback
-```
+## 日常实用功能
 
-v0.3.0 还增加了：
-
-- 修改前 SSH / 端口检查；
-- 修改后服务验证；
-- commit 前再次验证；
-- 事务历史；
-- 每个事务的事件记录；
-- 自动回滚日志。
-
-SSH 还支持更严格、但带保护的选项：
-
-```bash
-sudo vpsg ssh apply --disable-password --yes
-sudo vpsg ssh apply --root-key-only --yes
-```
-
-如果当前管理员没有检测到 `authorized_keys`，VPS Guard 会拒绝关闭密码登录。
-
-### Exposure Analyzer 2.0
-
-普通端口列表只告诉你“3306 在监听”。VPS Guard 尝试进一步回答：**它是什么、为什么值得关注、Docker 有没有发布、UFW 怎么看、应该怎么办。**
-
-```bash
-vpsg exposure scan
-vpsg exposure explain 3306
-vpsg exposure json
-```
-
-示例：
-
-```text
-PORT   RISK      SERVICE       SCOPE      REASON
-22     MEDIUM    SSH           wildcard   SSH 是必要管理入口，请确保密钥认证和防爆破
-80     LOW       Web           wildcard   常见 Web 服务端口
-3306   HIGH      MySQL         wildcard   数据库/管理类端口通常应限制来源
-6379   CRITICAL  Redis         wildcard   常见敏感服务不应直接暴露公网
-2375   CRITICAL  Docker API    wildcard   常见敏感服务不应直接暴露公网
-```
-
-同时关联：
-
-- TCP / UDP listener；
-- `0.0.0.0` / `::` / loopback / 私网绑定；
-- UFW；
-- Docker published ports；
-- 常见服务类型；
-- 风险等级；
-- 人能看懂的修复建议。
-
-它不会假装知道云厂商安全组状态，因此“本机具备公网接入条件”和“互联网一定可以访问”会明确区分。
-
-### Baseline & Drift 2.0
-
-服务器配置完成并确认可信后：
-
-```bash
-sudo vpsg baseline create
-```
-
-以后：
-
-```bash
-sudo vpsg drift scan
-```
-
-它会检查：
-
-- 新增/消失的监听端口；
-- Docker 端口和容器变化；
-- 用户账户；
-- sudo 权限；
-- `authorized_keys` 哈希与数量；
-- SSH 有效配置；
-- 防火墙；
-- systemd enabled 服务；
-- cron；
-- 关键 sysctl。
-
-输出不仅告诉你“哪个文件变了”，还会解释为什么值得关注，并把每次报告保存在本机：
-
-```bash
-vpsg drift history
-vpsg drift show <report>
-```
-
-## 基础运维能力
-
-### 用户与 sudo
+### 用户 / sudo / GitHub SSH Key
 
 ```bash
 vpsg users list
+sudo vpsg users bootstrap deploy octocat
 sudo vpsg users add deploy --sudo
-sudo vpsg users sudo deploy disable
-sudo vpsg users lock deploy
-sudo vpsg users unlock deploy
+sudo vpsg ssh import-github octocat --user deploy
 ```
 
-创建用户默认不设置可登录密码，建议随后导入 SSH key：
-
-```bash
-sudo vpsg ssh import-github <GitHub用户名> --user deploy
-```
+会区分密码字段状态、sudo、SSH Key 数量，不把 `passwd -l` 简单描述成“整个 SSH 账户已锁死”。
 
 ### UFW
 
@@ -181,7 +181,7 @@ sudo vpsg firewall allow 8080 tcp
 sudo vpsg firewall deny 3306 tcp
 ```
 
-VPS Guard 会拒绝直接 deny / 删除当前 SSH 端口规则。
+会保护检测到的当前 SSH 管理端口，并对关键 apply 使用 Safe Change。
 
 ### Fail2Ban
 
@@ -192,6 +192,8 @@ sudo vpsg fail2ban unban 203.0.113.10
 vpsg fail2ban logs
 ```
 
+只管理自己的 `jail.d` 片段，并对配置和服务生命周期做验证/回滚。
+
 ### Docker
 
 ```bash
@@ -201,7 +203,7 @@ vpsg docker ports
 sudo vpsg docker add-user deploy
 ```
 
-把用户加入 docker 组前会明确警告：docker 组通常等价于 root 权限。
+Docker CE 安装会先做 APT 模拟和冲突包分析，不默认使用 convenience `curl | bash`。把用户加入 `docker` 组前会明确提醒：这通常接近 root 权限。
 
 ### 1Panel
 
@@ -209,10 +211,19 @@ sudo vpsg docker add-user deploy
 vpsg panel status
 vpsg panel plan
 sudo vpsg panel install
-vpsg panel info
 ```
 
-VPS Guard **不会直接 `curl | bash`**。安装 1Panel 时先下载官方脚本到临时文件，检查不是 HTML/Cloudflare 错误页，显示 SHA-256 和脚本开头，再由管理员第二次确认执行。
+官方安装脚本会先下载到临时文件，检查 HTTPS/明显错误页、显示 SHA-256 和预览，再二次确认执行。
+
+### 系统更新
+
+```bash
+vpsg system plan
+sudo vpsg system apply
+sudo vpsg system auto-enable
+```
+
+使用 APT simulation 分析 Kernel、OpenSSH、Docker/containerd、held packages、磁盘和 reboot-required。自动安全更新默认**不自动重启 VPS**。
 
 ### 网络 / VPS 工具
 
@@ -221,25 +232,13 @@ vpsg network summary
 vpsg network speed 25
 vpsg network route 1.1.1.1
 vpsg network media
-vpsg network bench
+vpsg network yabs
+vpsg network region
 ```
 
-包含公网 IPv4/IPv6、DNS、轻量下载测速、mtr/traceroute、Netflix/YouTube/Disney+/Prime Video 可达性快速检查和 VPS 基础信息。
+基础网络功能由 VPS Guard 内置；YABS 和 RegionRestrictionCheck 属于明确的第三方集成边界，不把不同许可证的大段代码复制进本项目。
 
-> `network media` 是“可达性快速检查”，不是完整的地区解锁判定器。
-
-### 系统更新风险检查
-
-```bash
-vpsg system plan
-sudo vpsg system apply
-```
-
-升级前会提示 Kernel / OpenSSH / Docker 相关更新和剩余磁盘空间；升级后再次检查 SSH 配置和 Docker 服务。
-
-## VPS Guard Watch
-
-让 VPS Guard 从“想起来才运行”变成“每天自动看一下”：
+### Watch 2.0
 
 ```bash
 sudo vpsg watch enable
@@ -248,53 +247,86 @@ sudo vpsg watch run
 vpsg watch latest
 ```
 
-每天检查 Exposure + Drift，并把报告只保存在本机。当前版本**不会自动上传任何数据**。
+每天本地运行 Exposure + Drift。相同风险不会每天重复通知；通知 hook 失败也不会错误记录成成功。默认不会把服务器数据上传出去。
 
-## 异常现场采集
-
-怀疑服务器有异常时先保存现场，而不是上来就杀进程：
+### Incident Collector
 
 ```bash
 sudo vpsg incident collect
 ```
 
-会生成 root-only 压缩包，包含进程、socket、登录、SSH/Fail2Ban 日志、systemd、网络、Docker 等只读信息和 SHA-256 清单；不会复制 SSH 私钥或 `authorized_keys` 内容。
+收集进程名、socket、登录、SSH/Fail2Ban 日志、systemd、网络、Docker 等只读现场信息。
 
-## 其他模块
+默认**不采集完整进程命令行**，因为 argv 很可能包含 Token / 密码。确实需要时才显式开启相应选项。压缩包 root-only，并带内部 `SHA256SUMS`。
 
-- BBR
-- Swap
-- 系统状态 / doctor
-- 日志、备份与回滚
-- GitHub Actions CI
-- Bash regression tests
-- ShellCheck blocking/advisory 分级
+## 安装 / 升级 / 程序回滚
 
-## 安装
+### 从 Release 安装
 
-从 Release 下载源码并解压：
+从 [最新 GitHub Release](https://github.com/hg3mb/vps-guard/releases/latest) 下载压缩包；如果 Release 同时提供 `SHA256SUMS`，建议先校验，然后解压：
 
 ```bash
-cd vps-guard
+cd vps-guard-0.4.0
 sudo bash install.sh
 vpsg --version
 vpsg doctor
 ```
 
-使用 `bash install.sh` 是有意设计：即使 GitHub 网页上传或 ZIP 下载丢失 Unix executable bit，也不影响安装。安装后 `vpsg` 会通过 `/usr/local/bin/vpsg` 使用。
+### 从 Git 安装
 
-## 当前边界
+```bash
+git clone https://github.com/hg3mb/vps-guard.git
+cd vps-guard
+sudo bash install.sh
+vpsg doctor
+```
 
-VPS Guard 仍处于早期阶段。它不能替代：
+升级继续运行新版 `install.sh` 即可。
 
-- 云厂商安全组；
-- Provider Console / Rescue Mode；
-- 快照和异地备份；
-- 专业 IDS/EDR；
-- 对所有 nftables/iptables 自定义规则的完整证明；
-- 完整的流媒体地区解锁测试。
+如果只想恢复 VPS Guard **程序版本**：
 
-高风险远程配置仍建议拥有 Provider Console 作为最后兜底。
+```bash
+sudo bash install.sh --rollback
+```
+
+注意：程序版本 rollback 和 SSH/UFW Safe Change rollback 是两套独立机制，不会混在一起。
+
+## 正式支持目标
+
+CI 自动回归覆盖：
+
+- Debian 12
+- Debian 13
+- Ubuntu 22.04 LTS
+- Ubuntu 24.04 LTS
+
+不同 VPS 厂商镜像、网络和预装组件仍可能产生差异，欢迎提供真实环境报告。
+
+## 测试
+
+当前回归套件：**114 项全部通过（本地 Debian 环境）**。
+
+```bash
+bash tests/run.sh
+bash scripts/build-release.sh ./dist --self-test
+```
+
+CI 还会运行 Debian/Ubuntu matrix、ShellCheck 和 Release archive 自检。
+
+## 安全原则
+
+- 危险远程配置默认可回滚；
+- 写入配置后验证实际状态，不只验证“文件写成功”；
+- 扫描不完整就明确说不完整；
+- Docker published ports 不会因为简单 UFW 状态就被判定安全；
+- Baseline 不保存 SSH 私钥/authorized_keys 原文；
+- 第三方脚本必须经过明确的 staging / 检查 / 确认边界；
+- Watch / Incident 默认本地保存；
+- 卸载时如果还有未解决 Safe Change，会拒绝删除恢复能力。
+
+## 项目边界
+
+VPS Guard 不能替代：云厂商安全组、Console/Rescue、快照/异地备份、专业 IDS/EDR，也不能仅凭主机状态证明某个端口一定能从互联网访问。
 
 ## 文档
 
@@ -303,8 +335,9 @@ VPS Guard 仍处于早期阶段。它不能替代：
 - [功能矩阵](docs/feature-matrix.md)
 - [Roadmap](docs/roadmap.md)
 - [贡献指南](CONTRIBUTING.md)
-- [安全漏洞报告](SECURITY.md)
+- [漏洞报告](SECURITY.md)
+- [English README](README.md)
 
 ## License
 
-MIT
+MIT。第三方工具继续遵循各自上游许可证，不并入 VPS Guard 的 MIT 源码。

@@ -24,6 +24,7 @@ $VPSG_NAME $VPSG_VERSION
 用法:
   vpsg                              新手交互菜单
   vpsg status                       VPS 仪表盘
+  vpsg setup guide                  新手安全向导
   vpsg doctor                       只读安全检查
   vpsg exposure scan                实际公网暴露与风险解释
   sudo vpsg baseline create         创建安全基线
@@ -39,7 +40,7 @@ $VPSG_NAME $VPSG_VERSION
   sudo vpsg incident collect        只读异常现场采集
   vpsg module list                  列出模块
 
-模块: system ssh firewall fail2ban users docker panel network bbr swap exposure baseline drift watch incident
+模块: setup system ssh firewall fail2ban users docker panel network bbr swap exposure baseline drift watch incident
 USAGE
 }
 
@@ -57,8 +58,16 @@ status_overview() {
   printf 'Docker: '; _run docker status --brief 2>/dev/null || true
   printf 'BBR: '; _run bbr status --brief 2>/dev/null || true
   printf 'Swap: '; _run swap status --brief 2>/dev/null || true
-  if _tx_pending_id >/dev/null 2>&1; then
-    printf '%bSafe Change: 待确认（vpsg safe status）%b\n' "$C_YELLOW" "$C_RESET"
+  local txid txstatus txrc=0
+  txid="$(_tx_active_id 2>/dev/null)" || txrc=$?
+  if ((txrc==0)); then
+    txstatus="$(_tx_state_get "$(_tx_dir_for "$txid")" status)"
+    case "$txstatus" in
+      pending|commit_pending) printf '%bSafe Change: %s（vpsg safe status）%b\n' "$C_YELLOW" "$txstatus" "$C_RESET" ;;
+      *) printf '%bSafe Change: %s — 需要处理（vpsg safe status）%b\n' "$C_RED" "$txstatus" "$C_RESET" ;;
+    esac
+  elif ((txrc!=1)); then
+    printf '%bSafe Change: 状态记录异常 — 拒绝危险修改直到检查完成%b\n' "$C_RED" "$C_RESET"
   fi
   if [[ -d "$VPSG_STATE_DIR/baselines/default" ]]; then
     printf '安全基线: 已创建\n'
@@ -68,14 +77,43 @@ status_overview() {
 }
 
 doctor() {
-  local failures=0
-  platform_supported && ok "支持的系统: $VPSG_OS_PRETTY" || { warn "当前只正式支持 Debian/Ubuntu"; failures=$((failures+1)); }
-  if p="$(ssh_primary_port 2>/dev/null)"; then ok "确认 SSH 端口: $p"; else warn "无法唯一确认 SSH 端口；不会自动启用防火墙"; failures=$((failures+1)); fi
-  if [[ -r /etc/ssh/sshd_config ]] && have sshd && sshd -t 2>/dev/null; then ok "OpenSSH 配置语法正常"; else warn "无法验证 OpenSSH 配置"; failures=$((failures+1)); fi
-  have systemctl && ok "systemd / Safe Change timer 可用" || { warn "systemd 不可用，失联自动回滚无法工作"; failures=$((failures+1)); }
-  have ss && ok "Exposure Analyzer 可用" || { warn "缺少 ss/iproute2"; failures=$((failures+1)); }
-  have curl && ok "网络诊断依赖 curl 可用" || warn "缺少 curl，网络/1Panel 部分功能需要安装"
-  printf '检查完成：%d 项需要关注。\n' "$failures"
+  local attention=0 free failed baseline_rc docker_vis
+  echo "VPS Guard 安全体检"
+  echo "================="
+  platform_supported && ok "支持的系统: $VPSG_OS_PRETTY" || { warn "当前只正式支持 Debian/Ubuntu"; attention=$((attention+1)); }
+  if p="$(ssh_primary_port 2>/dev/null)"; then ok "确认 SSH 管理端口: $p/tcp"; else warn "无法唯一确认 SSH 端口；Safe Change/UFW 会拒绝猜测"; attention=$((attention+1)); fi
+  if [[ -r /etc/ssh/sshd_config ]] && have sshd; then sshd -t 2>/dev/null && ok "OpenSSH 配置语法正常" || { warn "OpenSSH 配置语法异常"; attention=$((attention+1)); }; else warn "未检测到可验证的 OpenSSH Server"; attention=$((attention+1)); fi
+  have systemctl && have flock && have sync && ok "Safe Change 所需 systemd + flock + sync 可用" || { warn "缺少 systemd/flock/coreutils sync，危险变更自动回滚不可用"; attention=$((attention+1)); }
+  local txid txstatus txrc=0
+  txid="$(_tx_active_id 2>/dev/null)" || txrc=$?
+  if ((txrc==0)); then
+    txstatus="$(_tx_state_get "$(_tx_dir_for "$txid")" status)"
+    case "$txstatus" in
+      pending|commit_pending) warn "存在未完成 Safe Change: $txstatus ($txid)" ;;
+      *) warn "Safe Change 处于异常/恢复状态: $txstatus ($txid)" ;;
+    esac
+    attention=$((attention+1))
+  elif ((txrc!=1)); then
+    warn "Safe Change 状态记录存在歧义/损坏；危险修改会 fail closed"
+    attention=$((attention+1))
+  fi
+  have ss && ok "Exposure host socket 扫描可用" || { warn "缺少 ss/iproute2，Exposure 不完整"; attention=$((attention+1)); }
+  if have docker; then
+    docker_vis="$(inspect_docker_visibility)"; if [[ "$docker_vis" == accessible ]]; then ok "Docker published ports 可扫描"; else warn "Docker 已安装但当前用户无法读取 published ports；请用 sudo vpsg exposure scan"; attention=$((attention+1)); fi
+  fi
+  if have ufw && ufw status 2>/dev/null | grep -q '^Status: active'; then ok "UFW 已启用"; else warn "UFW 未启用（是否需要取决于你的网络/云防火墙策略）"; attention=$((attention+1)); fi
+  if have systemctl && systemctl is-active --quiet fail2ban 2>/dev/null; then ok "Fail2Ban 正在运行"; else warn "Fail2Ban 未运行"; attention=$((attention+1)); fi
+  if [[ -d "$VPSG_STATE_DIR/baselines/default" ]]; then
+    /bin/bash "$VPSG_ROOT/modules/builtin/baseline/module.sh" verify default >/dev/null 2>&1; baseline_rc=$?
+    case "$baseline_rc" in 0) ok "default Baseline 完整性通过";; 30) warn "Baseline 来自旧 schema，建议确认当前状态可信后重建"; attention=$((attention+1));; *) warn "Baseline 完整性验证失败，请调查后再 accept/rebuild"; attention=$((attention+1));; esac
+  else info "尚未创建安全基线；系统稳定后建议 sudo vpsg baseline create"; fi
+  free="$(root_free_mb 2>/dev/null || echo 0)"; [[ "$free" =~ ^[0-9]+$ ]] && ((free>=1024)) && ok "根分区可用 ${free} MB" || { warn "根分区可用空间偏低: ${free} MB"; attention=$((attention+1)); }
+  if have systemctl; then failed="$(systemctl --failed --no-legend 2>/dev/null | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"; [[ "$failed" == 0 ]] && ok "没有 failed systemd units" || { warn "发现 $failed 个 failed systemd units"; attention=$((attention+1)); }; fi
+  [[ ! -e /var/run/reboot-required ]] && ok "当前未检测到 reboot-required" || { warn "系统提示需要重启"; attention=$((attention+1)); }
+  if have systemctl && systemctl is-enabled --quiet vps-guard-watch.timer 2>/dev/null; then ok "VPS Guard Watch 已启用"; else info "Watch 未启用；建立 Baseline 后可用 sudo vpsg watch enable"; fi
+  echo
+  printf '体检完成：%d 项需要关注。\n' "$attention"
+  ((attention==0)) || echo "下一步建议：sudo vpsg exposure scan；不理解的端口可用 vpsg exposure explain <port>。"
 }
 
 menu() {
@@ -154,7 +192,7 @@ main() {
     status) status_overview ;;
     doctor) doctor ;;
     safe) shift; safe_command "$@" ;;
-    commit) tx_commit "${2:-}" ;;
+    commit) shift; tx_commit "$@" ;;
     module)
       case "${2:-}" in list) module_list;; *) error "用法: vpsg module list"; return 64;; esac ;;
     *)

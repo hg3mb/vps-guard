@@ -1,157 +1,258 @@
 # VPS Guard
 
-A safety-first, beginner-friendly VPS hardening and operations toolkit for Debian and Ubuntu.
+[![CI](https://github.com/hg3mb/vps-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/hg3mb/vps-guard/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hg3mb/vps-guard)](https://github.com/hg3mb/vps-guard/releases/latest)
+[![License](https://img.shields.io/github/license/hg3mb/vps-guard)](LICENSE)
 
-VPS Guard is built around three questions traditional one-click scripts often leave unanswered:
+
+**Safety-first VPS hardening and operations for Debian and Ubuntu.**
+
+VPS Guard is designed for people who want a VPS toolbox that is easy to use **without turning security-critical changes into blind one-click actions**.
+
+It focuses on four questions:
 
 1. **What if an SSH/firewall change locks me out?**
-2. **What is actually exposed on this server, including Docker-published ports?**
-3. **What changed after I last confirmed the server was in a trusted state?**
+2. **What is actually exposed, including Docker-published ports?**
+3. **What changed after I last trusted this server?**
+4. **Did a check find nothing, or was the check incomplete?**
 
-Current release: **v0.3.0**
+Current release: **v0.4.0** · [Repository](https://github.com/hg3mb/vps-guard) · [Latest release](https://github.com/hg3mb/vps-guard/releases/latest)
 
-> VPS Guard is early-stage software. Keep provider console/rescue access available when changing remote access controls.
+> VPS Guard is still an early-stage project. Keep provider console/rescue access available when changing remote-access controls.
 
-## Core differentiators
+## Why VPS Guard
 
-### Safe Change Engine 2.0
+Traditional VPS scripts are good at *doing things*. VPS Guard also tries to make risky changes reversible, security findings explainable, and later changes auditable.
 
-Risky SSH/UFW changes are transactional. VPS Guard performs pre-checks, snapshots state, arms a persistent systemd rollback timer, applies the change, verifies it, and refuses to make it permanent until the administrator commits it.
+### Safe Change Engine 3.0
+
+SSH and access-critical UFW changes use a transaction rather than a fire-and-forget script:
+
+```text
+precheck
+  -> snapshot
+  -> arm persistent rollback
+  -> apply
+  -> verify
+  -> reconnect / console confirmation
+  -> commit
+
+No commit before timeout -> automatic rollback
+```
 
 ```bash
-sudo vpsg ssh apply --yes
-sudo vpsg firewall apply --yes
+sudo vpsg ssh apply --disable-password --yes
 vpsg safe status
 sudo vpsg commit
 vpsg safe history
 ```
 
-If access is lost and no commit happens, the server restores the previous configuration automatically. Transaction history, event logs, post-apply validation and commit-time verification are included.
+Key properties:
 
-### Exposure Analyzer 2.0
+- one active access-critical transaction at a time;
+- root-owned transaction state and history;
+- persistent systemd rollback independent of the initiating SSH shell;
+- SSH syntax **and effective-policy** verification;
+- commit rejects the same SSH login session unless console confirmation is explicitly used;
+- manual rollback and deadline extension;
+- unresolved failure states continue blocking new risky changes.
+
+### Exposure Analyzer 3.0
 
 ```bash
-vpsg exposure scan
+sudo vpsg exposure scan
 vpsg exposure explain 6379
+vpsg exposure profile set web
 vpsg exposure json
 ```
 
-It correlates listeners, bind scope, UFW, Docker-published ports and common service types, then assigns explainable risk levels and recommendations. It distinguishes host-level exposure indicators from proven Internet reachability because cloud security groups, NAT and upstream firewalls remain outside the host.
+Exposure Analyzer combines:
 
-### Baseline & Drift 2.0
+- Linux TCP/UDP listeners;
+- bind scope (`loopback`, private/CGNAT, specific public address, wildcard);
+- Docker published ports from structured Docker metadata;
+- UFW context;
+- common service types and container ports;
+- server profile expectations.
+
+It reports explainable `CRITICAL/HIGH/MEDIUM/LOW/INFO` findings instead of a magic security score.
+
+If Docker is installed but the current user cannot inspect the daemon, VPS Guard marks the scan **incomplete** rather than claiming no Docker exposure exists.
+
+### Baseline & Semantic Drift 3.0
 
 ```bash
 sudo vpsg baseline create
+sudo vpsg baseline verify
 sudo vpsg drift scan
 vpsg drift history
+sudo vpsg drift accept <report-id>
 ```
 
-Tracks listeners, Docker ports/containers, users, sudo access, authorized-key hashes/counts, SSH policy, firewall state, enabled services, cron and selected sysctls. Drift output explains why each changed area matters and stores local audit reports.
+The baseline tracks security-relevant state such as listeners, Docker publications, users, sudo access, authorized-key hashes/counts, SSH effective policy, firewall state, enabled services, cron metadata and selected sysctls.
 
-## Practical VPS management
+Drift turns changes into operator-oriented events, for example:
 
 ```text
-SSH / GitHub SSH key import     ✓
-UFW firewall management         ✓
-Fail2Ban                        ✓
-User and sudo management        ✓
-Docker / Compose                ✓
-1Panel integration              ✓
-BBR / Swap                      ✓
-Network speed / route tools     ✓
-Media reachability probes       ✓
-Risk-aware APT upgrade plan     ✓
-Daily security Watch            ✓
-Read-only incident collection   ✓
+CRITICAL  + Docker API published publicly
+HIGH      + authorized_keys changed
+HIGH      + sudo access changed
+MEDIUM    + new login-capable user
+MEDIUM    + inspection coverage became incomplete
+INFO      - a previous listener disappeared
 ```
 
-Start the beginner menu with:
+Snapshot integrity covers both file contents and the expected file set. Collector failures are recorded explicitly, so “not found” is not confused with “not inspected.”
+
+## Beginner workflow
+
+Start with:
 
 ```bash
 vpsg
 ```
 
+or:
+
+```bash
+vpsg setup guide
+```
+
+Recommended order:
+
+```text
+Doctor / Exposure
+  -> choose server profile
+  -> create a second admin + SSH key
+  -> Fail2Ban + automatic security updates
+  -> Safe Change SSH/UFW
+  -> create Baseline
+  -> enable Watch
+```
+
+There is intentionally no “press Enter to rewrite the whole server” mode.
+
+## Practical VPS toolbox
+
+| Area | Commands / behavior |
+| --- | --- |
+| System health | `vpsg status`, `vpsg doctor` |
+| SSH | hardening, port-aware migration, GitHub key import |
+| Firewall | UFW status/apply/allow/deny/web helpers with SSH-port protection |
+| Fail2Ban | isolated jail fragment, status, banned IPs, unban, logs |
+| Users | users/sudo state, bootstrap admin flow, lock/unlock/delete protections |
+| Docker | Docker CE install, containers, published ports, docker-group warning |
+| 1Panel | checked official installer staging instead of blind pipe-to-shell |
+| Updates | APT simulation, kernel/OpenSSH/Docker risk hints, unattended-upgrades |
+| Network | public IP/DNS, speed, route, media reachability |
+| Optional diagnostics | checked YABS / RegionRestrictionCheck integration |
+| Kernel / memory | BBR, managed swap |
+| Watch | scheduled local Exposure + Drift with optional secure hook |
+| Incident response | privacy-aware read-only evidence bundle + SHA256 manifest |
+
 ## Examples
 
 ```bash
-# Dashboard and security checks
-vpsg status
+# Read-only first
 vpsg doctor
-vpsg exposure scan
+sudo vpsg exposure scan
+
+# Create a second administrator from GitHub keys
+sudo vpsg users bootstrap deploy octocat
 
 # Safer SSH hardening
-sudo vpsg ssh apply --disable-password --root-key-only --yes
-vpsg safe status
+sudo vpsg ssh apply --disable-password --yes
+# Open a NEW SSH login, then:
 sudo vpsg commit
 
-# Users and GitHub keys
-sudo vpsg users add deploy --sudo
-sudo vpsg ssh import-github octocat --user deploy
-
-# Firewall / Fail2Ban
-sudo vpsg firewall apply --yes
-sudo vpsg firewall web
-sudo vpsg fail2ban apply --yes
-
-# Docker / 1Panel
-sudo vpsg docker apply --yes
-vpsg docker ports
-sudo vpsg panel install
-
-# Network tools
-vpsg network summary
-vpsg network speed 25
-vpsg network route 1.1.1.1
-vpsg network media
-
-# Continuous local checks
+# Baseline and later drift
 sudo vpsg baseline create
+sudo vpsg drift scan
+
+# Daily local monitoring
 sudo vpsg watch enable
+vpsg watch status
 ```
 
 ## Install
 
-Download a release, inspect/verify it, extract it, then:
+### From a release archive
+
+Download the [latest GitHub Release](https://github.com/hg3mb/vps-guard/releases/latest), optionally verify it with the published `SHA256SUMS`, extract it, then:
 
 ```bash
+cd vps-guard-0.4.0
 sudo bash install.sh
 vpsg --version
 vpsg doctor
 ```
 
-The installer intentionally works even if executable mode bits were lost by a ZIP download or web upload. The runtime router also invokes built-in modules through Bash rather than relying on source-tree executable bits.
+### From Git
+
+```bash
+git clone https://github.com/hg3mb/vps-guard.git
+cd vps-guard
+sudo bash install.sh
+vpsg doctor
+```
+
+Using `bash install.sh` is intentional: ZIP downloads and browser uploads may lose Unix executable mode bits.
+
+Upgrade uses the same installer. The previous **program version** can be restored with:
+
+```bash
+sudo bash install.sh --rollback
+```
+
+Program rollback is deliberately separate from SSH/UFW Safe Change rollback.
 
 ## Supported systems
 
-- Debian 12/13
-- Ubuntu 22.04/24.04
-- systemd
+CI regression targets:
+
+- Debian 12
+- Debian 13
+- Ubuntu 22.04 LTS
+- Ubuntu 24.04 LTS
+- systemd-based VPS environments
+
+Real-provider compatibility still depends on networking, images and provider customizations; reports are welcome.
 
 ## Security principles
 
-- preserve current SSH access before firewall enforcement;
-- use automatic rollback for access-critical changes;
-- validate before and after high-risk changes;
-- avoid `curl | bash` for the built-in 1Panel workflow;
-- do not store SSH private keys or copy authorized-key contents into baselines;
-- separate host-level exposure indicators from provider-level reachability;
-- keep Watch and incident data local by default.
+- preserve a known management path before access-control enforcement;
+- make dangerous remote-access changes reversible by default;
+- verify **effective state**, not only generated config files;
+- never treat incomplete visibility as a clean result;
+- keep Docker publication separate from simplistic UFW assumptions;
+- avoid storing SSH private keys or authorized-key contents in baselines;
+- stage and inspect external scripts instead of silently piping them into a root shell;
+- keep Watch and incident data local unless the operator explicitly configures an output.
 
-See [docs/security-model.md](docs/security-model.md).
+See [Security model](docs/security-model.md) and [SECURITY.md](SECURITY.md).
 
-## Development
+## Tests and release engineering
 
 ```bash
 bash tests/run.sh
-shellcheck -x -S error bin/vpsg core/*.sh modules/builtin/*/module.sh install.sh uninstall.sh
+bash scripts/build-release.sh ./dist --self-test
 ```
 
-See [docs/feature-matrix.md](docs/feature-matrix.md), [docs/roadmap.md](docs/roadmap.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+The current regression suite contains **114 tests**. CI additionally runs a Debian/Ubuntu matrix, ShellCheck, and release-archive self-tests.
 
-## Chinese documentation
+## Documentation
 
-[README.zh-CN.md](README.zh-CN.md)
+- [Architecture](docs/architecture.md)
+- [Security model](docs/security-model.md)
+- [Feature matrix](docs/feature-matrix.md)
+- [Roadmap](docs/roadmap.md)
+- [Contributing](CONTRIBUTING.md)
+- [中文说明](README.zh-CN.md)
+
+## Scope / limitations
+
+VPS Guard does not replace provider security groups, backups, rescue consoles, IDS/EDR, or a full proof of arbitrary nftables/iptables policy. Host exposure is not the same thing as proven Internet reachability.
 
 ## License
 
-MIT
+MIT. Third-party tools remain under their own upstream licenses and are not vendored into the VPS Guard MIT source tree.

@@ -30,31 +30,38 @@ ssh_connection_port() {
   return 1
 }
 
+ssh_configured_ports() {
+  have sshd || return 20
+  sshd -T 2>/dev/null | awk '$1=="port" && $2 ~ /^[0-9]+$/ {print $2}' | sort -nu
+}
+
 ssh_listening_ports() {
   local ports=""
   if have ss; then
-    ports="$(ss -ltnp 2>/dev/null | awk '/sshd|ssh\.socket/ {split($4,a,":"); p=a[length(a)]; if (p ~ /^[0-9]+$/) print p}' | sort -nu)"
+    ports="$(ss -H -ltnp 2>/dev/null | awk '/sshd|ssh\.socket/ {split($4,a,":"); p=a[length(a)]; if (p ~ /^[0-9]+$/) print p}' | sort -nu)"
   fi
-  if [[ -z "$ports" ]] && have sshd; then
-    ports="$(sshd -T 2>/dev/null | awk '$1=="port" {print $2}' | sort -nu)"
-  fi
+  if [[ -z "$ports" ]]; then ports="$(ssh_configured_ports 2>/dev/null || true)"; fi
   printf '%s\n' "$ports" | sed '/^$/d'
 }
 
+ssh_effective_primary_port() {
+  local ports count
+  ports="$(ssh_configured_ports 2>/dev/null || true)"
+  count="$(grep -c . <<<"$ports" || true)"
+  if [[ -n "$ports" && "$count" == 1 ]]; then printf '%s\n' "$ports"; return 0; fi
+  ports="$(ssh_listening_ports 2>/dev/null || true)"
+  count="$(grep -c . <<<"$ports" || true)"
+  if [[ -n "$ports" && "$count" == 1 ]]; then printf '%s\n' "$ports"; return 0; fi
+  return 1
+}
+
+# Management port prefers the current SSH connection. This is intentionally
+# different from ssh_effective_primary_port(): while changing SSH settings the
+# old connection must remain protected until a new login works.
 ssh_primary_port() {
   local p
-  if p="$(ssh_connection_port 2>/dev/null)"; then
-    printf '%s\n' "$p"
-    return 0
-  fi
-  local ports count
-  ports="$(ssh_listening_ports)"
-  count="$(wc -l <<<"$ports" | tr -d ' ')"
-  if [[ -n "$ports" && "$count" == "1" ]]; then
-    printf '%s\n' "$ports"
-    return 0
-  fi
-  return 1
+  if p="$(ssh_connection_port 2>/dev/null)"; then printf '%s\n' "$p"; return 0; fi
+  ssh_effective_primary_port
 }
 
 memory_mb() { awk '/MemTotal:/ {printf "%d\n", $2/1024}' /proc/meminfo; }
