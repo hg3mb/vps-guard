@@ -49,9 +49,11 @@ _hook_safe() {
 }
 
 _notify_if_needed() {
-  local report="$1" severity="$2" threshold fingerprint old rc=0
+  local report="$1" severity="$2" threshold fingerprint old rc=0 severity_rank threshold_rank
   threshold="$(_threshold)"
-  ((_sev_rank "$severity" >= _sev_rank "$threshold")) || return 0
+  severity_rank="$(_sev_rank "$severity")"
+  threshold_rank="$(_sev_rank "$threshold")"
+  ((severity_rank >= threshold_rank)) || return 0
   [[ "$severity" != INFO && "$severity" != LOW ]] || return 0
   if [[ ! -e "$HOOK" ]]; then return 0; fi
   if ! _hook_safe; then warn "Watch 通知 hook 权限不安全，已拒绝执行: $HOOK"; return 30; fi

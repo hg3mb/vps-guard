@@ -163,6 +163,14 @@ swapfile=$managed
 file_identity=$identity
 size_mb=256
 EOF_STATE
+  # This case verifies rollback resource binding, not systemd path escaping.
+  # Minimal Debian/Ubuntu CI images do not ship systemd-escape, so provide a
+  # deterministic test double instead of making the unit test depend on the
+  # host's systemd package.
+  make_mock "$base" systemd-escape <<'MOCK'
+#!/usr/bin/env bash
+printf 'vpsg-test.swap\n'
+MOCK
   unit="$(unit_name_for "$managed")"; file="$(unit_file_for "$managed")"
   cat > "$file" <<EOF_UNIT
 # Managed by VPS Guard
