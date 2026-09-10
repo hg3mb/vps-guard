@@ -7,11 +7,44 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
-jobs:
-  test:
-    name: Test on Ubuntu
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
+jobs:
+  regression:
+    name: Regression (${{ matrix.image }})
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - debian:12
+          - debian:13
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      - name: Install CI dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            bash ca-certificates coreutils findutils git grep gzip iproute2 passwd procps sed tar unzip util-linux zip
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Bash syntax
+        run: |
+          find . -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          bash -n bin/vpsg
+
+      - name: Regression suite
+        run: bash tests/run.sh
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -21,30 +54,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y shellcheck
 
-      - name: Check Bash syntax
+      - name: Blocking ShellCheck findings
         run: |
-          find . -type f -name "*.sh" -print0 | xargs -0 -n1 bash -n
-          bash -n bin/vpsg
-
-      - name: Restore executable permissions
-        run: |
-          find . -type f \( -name "*.sh" -o -path "./bin/vpsg" \) -exec chmod +x {} +
-
-      - name: Run VPS Guard tests
-        run: |
-          bash ./tests/run.sh
-
-      - name: ShellCheck blocking errors
-        run: |
-          find bin core modules scripts tests \
-            -type f \( -name "*.sh" -o -name "vpsg" \) \
-            -print0 | xargs -0 shellcheck -x -S error
+          find bin core modules scripts tests -type f \( -name '*.sh' -o -name 'vpsg' \) -print0 \
+            | xargs -0 shellcheck -x -S error
           shellcheck -x -S error install.sh uninstall.sh
 
-      - name: ShellCheck advisory warnings
+      - name: Advisory ShellCheck findings
         continue-on-error: true
         run: |
-          find bin core modules scripts tests \
-            -type f \( -name "*.sh" -o -name "vpsg" \) \
-            -print0 | xargs -0 shellcheck -x
+          find bin core modules scripts tests -type f \( -name '*.sh' -o -name 'vpsg' \) -print0 \
+            | xargs -0 shellcheck -x
           shellcheck -x install.sh uninstall.sh
+
+  release-smoke:
+    name: Release archive self-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and test release archives
+        run: bash scripts/build-release.sh "$RUNNER_TEMP/dist" --self-test
