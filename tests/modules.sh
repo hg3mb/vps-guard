@@ -6,6 +6,9 @@ case_users_list() ( new_case_env users >/dev/null; local out; out="$(bash "$ROOT
 case_users_password_disable_requires_key() (
   local base rc=0
   new_case_env userpassnokey >/dev/null; base="$CASE_BASE"; source_module_defs users
+  # This case tests the SSH-key safety guard, not privilege detection. GitHub
+  # Actions runs the suite as an unprivileged user, so isolate require_root.
+  require_root(){ return 0; }
   make_mock "$base" getent <<'MOCK'
 #!/usr/bin/env bash
 [[ "$1" == passwd && "$2" == testuser ]] && { printf 'testuser:x:1001:1001::%s/home:/bin/bash\n' "$CASE_BASE"; exit 0; }
@@ -18,6 +21,8 @@ MOCK
 case_users_password_disable_preserves_pubkey_path() (
   local base
   new_case_env userpasskey >/dev/null; base="$CASE_BASE"; source_module_defs users
+  # Exercise password-disable behavior independently of the caller's EUID.
+  require_root(){ return 0; }
   mkdir -p "$base/home/.ssh"; printf 'ssh-ed25519 AAAATEST example\n' > "$base/home/.ssh/authorized_keys"
   make_mock "$base" getent <<'MOCK'
 #!/usr/bin/env bash
@@ -58,13 +63,16 @@ case_docker_repo_symlink_rejected() (
 )
 case_docker_arch_suffix_removal() ( local base sim out; new_case_env dockerarch >/dev/null; base="$CASE_BASE"; source_module_defs docker; sim="$base/sim"; printf 'Remv docker.io:amd64 [1]\nRemv nginx:amd64 [1]\n' > "$sim"; out="$(_unexpected_removals "$sim")"; [[ "$out" == nginx ]]; )
 case_authorized_keys_options_and_modes() (
-  local base home
+  local base home owner_uid
   new_case_env keyoptions >/dev/null; base="$CASE_BASE"; source_module_defs ssh
   home="$base/home"; mkdir -p "$home/.ssh"; chmod 755 "$home"; chmod 700 "$home/.ssh"
   printf 'from="10.0.0.1",no-agent-forwarding ssh-ed25519 AAAATEST comment\n' > "$home/.ssh/authorized_keys"; chmod 600 "$home/.ssh/authorized_keys"
-  make_mock "$base" getent <<'MOCK'
+  # The fixture must represent the account that owns the temporary home.
+  # Hard-coding UID 0 made this pass as root but fail on GitHub's runner user.
+  owner_uid="$(stat -c '%u' "$home")"
+  make_mock "$base" getent <<MOCK
 #!/usr/bin/env bash
-[[ "$1" == passwd && "$2" == testadmin ]] && { printf 'testadmin:x:0:0::%s/home:/bin/bash\n' "$CASE_BASE"; exit 0; }
+[[ "\$1" == passwd && "\$2" == testadmin ]] && { printf 'testadmin:x:${owner_uid}:0::%s/home:/bin/bash\n' "\$CASE_BASE"; exit 0; }
 exit 2
 MOCK
   SUDO_USER=testadmin has_admin_key || return 1
